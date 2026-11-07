@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Park It</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700&display=swap">
+<style>
+:root{--bg:#dfe3ea;--ink:#171b26;--card:#ffffff;--line:#f2c230;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px);color-scheme:light}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0e1118;--ink:#e9ecf3;--card:#1a1f2c;color-scheme:dark}}
+:root[data-theme="dark"]{--bg:#0e1118;--ink:#e9ecf3;--card:#1a1f2c;color-scheme:dark}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Barlow Condensed","Arial Narrow",system-ui,sans-serif;display:flex;flex-direction:column;align-items:center;gap:10px;padding:10px;min-height:100vh;touch-action:none;user-select:none;-webkit-user-select:none}
+.hud{width:100%;max-width:900px;display:flex;justify-content:space-between;font-size:26px;font-weight:700;letter-spacing:.02em}
+.stage{position:relative;width:100%;max-width:900px;aspect-ratio:8/5;border-radius:12px;overflow:hidden;border:3px solid var(--line)}
+canvas{width:100%;height:100%;display:block}
+.ov{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(10,13,20,.72);padding:16px}
+.ov[hidden]{display:none}
+.card{background:var(--card);color:var(--ink);padding:20px 26px;border-radius:12px;text-align:center;max-width:380px}
+.card h2{margin:0 0 6px;font-size:40px;line-height:1}
+.card p{margin:6px 0 14px;font-family:system-ui,sans-serif;font-size:15px;line-height:1.4}
+button{font:700 22px "Barlow Condensed",system-ui,sans-serif;border:0;border-radius:10px;padding:10px 22px;background:#f2c230;color:#1a1a1a;cursor:pointer}
+button:focus-visible{outline:3px solid #38a8f0;outline-offset:2px}
+.pad{width:100%;max-width:900px;display:flex;justify-content:space-between;gap:12px}
+.pad div{display:flex;gap:10px}
+.pad button{min-width:84px;height:64px;background:var(--card);color:var(--ink);border:2px solid var(--line);font-size:20px}
+.pad button.on{background:#f2c230;color:#1a1a1a}
+</style>
+</head>
+<body>
+<div class="hud"><span id="lv"></span><span id="tm"></span><span id="bp"></span></div>
+<div class="stage"><canvas id="c" width="800" height="500"></canvas>
+<div class="ov" id="ov"><div class="card" id="cd"></div></div></div>
+<div class="pad">
+<div><button data-k="l">Left</button><button data-k="r">Right</button></div>
+<div><button data-k="d">Reverse</button><button data-k="u">Gas</button></div>
+</div>
+<script>
+const C=document.getElementById('c'),g=C.getContext('2d'),W=800,H=500,PI=Math.PI;
+const LV=[
+{n:'Open lot',tip:'Drive into the yellow bay and stop.',par:18,s:[100,400,0],b:[600,250,92,46],o:[['cone',350,250],['cone',350,330],['cone',480,150]]},
+{n:'Parallel squeeze',tip:'Slot in between the two parked cars.',par:28,s:[90,300,0],b:[400,432,92,38],o:[['car',312,432,50,24],['car',488,432,50,24],['wall',400,480,800,40],['cone',200,380]]},
+{n:'Nose-in bay',tip:'Tight bay. Line up first, then go in straight.',par:30,s:[100,200,0],b:[400,410,36,66],o:[['car',352,410,26,54],['car',448,410,26,54],['wall',400,486,800,32],['cone',220,300],['cone',560,300]]},
+{n:'Garden detour',tip:'Go around the planter to reach the far bay.',par:35,s:[80,430,0],b:[700,80,76,36],o:[['plant',400,250,200,130],['cone',250,380],['cone',600,380],['cone',560,150],['car',700,135,50,24]]},
+{n:'Rush hour',tip:'Narrow bay at the top. Take your time.',par:42,s:[700,430,PI],b:[400,100,36,66],o:[['car',352,100,26,54],['car',448,100,26,54],['wall',400,20,800,40],['plant',400,300,160,60],['plant',200,200,60,160],['cone',560,300],['cone',300,420]]}
+];
+const CARC=['#7d8aa3','#4f8f8b','#b3a58a','#8a6f9a','#a86f6f'];
+const K={l:0,r:0,u:0,d:0,b:0};
+const KM={ArrowLeft:'l',a:'l',ArrowRight:'r',d:'r',ArrowUp:'u',w:'u',ArrowDown:'d',s:'d',' ':'b'};
+let lv=0,state='intro',car,steer,t,bumps,hold,cd,flash,stars=[0,0,0,0,0];
+const $=id=>document.getElementById(id);
+addEventListener('keydown',e=>{const k=KM[e.key.length>1?e.key:e.key.toLowerCase()];if(k){K[k]=1;e.preventDefault()}if(e.key.toLowerCase()==='r'&&state==='play')load(lv)});
+addEventListener('keyup',e=>{const k=KM[e.key.length>1?e.key:e.key.toLowerCase()];if(k)K[k]=0});
+document.querySelectorAll('.pad button').forEach(b=>{const k=b.dataset.k;
+ const on=e=>{e.preventDefault();K[k]=1;b.classList.add('on')},off=()=>{K[k]=0;b.classList.remove('on')};
+ b.addEventListener('pointerdown',on);['pointerup','pointerleave','pointercancel'].forEach(n=>b.addEventListener(n,off))});
+function show(html){$('cd').innerHTML=html;$('ov').hidden=false}
+function intro(i){lv=i;state='intro';const l=LV[i];
+ show(`<h2>Level ${i+1}: ${l.n}</h2><p>${l.tip}<br>Arrow keys or WASD to drive, Space to brake, R to restart. On a phone, use the buttons below.</p><button id="go">Start</button>`);
+ $('go').onclick=()=>load(i)}
+function load(i){lv=i;const s=LV[i].s;car={x:s[0],y:s[1],a:s[2],v:0};steer=0;t=0;bumps=0;hold=0;cd=0;flash=0;state='play';$('ov').hidden=true}
+function corners(x,y,a){const c=Math.cos(a),s=Math.sin(a);return[[22,11],[22,-11],[-22,-11],[-22,11]].map(([u,v])=>[x+u*c-v*s,y+u*s+v*c])}
+const SP=[];for(let u=-22;u<=22;u+=11)SP.push([u,-11],[u,11]);SP.push([-22,0],[22,0]);
+function obs(o){return o[0]==='cone'?[o[1],o[2],14,14]:[o[1],o[2],o[3],o[4]]}
+function hit(x,y,a){const c=Math.cos(a),s=Math.sin(a);
+ for(const[u,v]of SP){const px=x+u*c-v*s,py=y+u*s+v*c;
+  if(px<2||py<2||px>W-2||py>H-2)return 1;
+  for(const o of LV[lv].o){const[ox,oy,w,h]=obs(o);if(Math.abs(px-ox)<w/2&&Math.abs(py-oy)<h/2)return 1}}
+ return 0}
+function inBay(){const[bx,by,bw,bh]=LV[lv].b;return corners(car.x,car.y,car.a).every(([x,y])=>Math.abs(x-bx)<=bw/2+1&&Math.abs(y-by)<=bh/2+1)}
+function update(dt){
+ t+=dt;cd-=dt;flash-=dt;
+ const thr=K.u-K.d;let v=car.v;
+ if(thr){v+=thr*((thr*v<0)?420:200)*dt}else v-=Math.sign(v)*Math.min(Math.abs(v),70*dt);
+ if(K.b)v-=Math.sign(v)*Math.min(Math.abs(v),400*dt);
+ v=Math.max(-80,Math.min(140,v));
+ steer+=((K.r-K.l)*.55-steer)*Math.min(1,dt*7);
+ const na=car.a+v/28*Math.tan(steer)*dt,nx=car.x+Math.cos(na)*v*dt,ny=car.y+Math.sin(na)*v*dt;
+ if(hit(nx,ny,na)){if(cd<=0){bumps++;cd=.6;flash=.25}v=-v*.35;if(Math.abs(v)<12)v=v<0?-12:12}
+ else{car.x=nx;car.y=ny;car.a=na}
+ car.v=v;
+ if(inBay()&&Math.abs(v)<10)hold+=dt;else hold=Math.max(0,hold-dt*2);
+ if(hold>=.8)win()}
+function win(){state='win';const l=LV[lv],s=bumps==0&&t<=l.par?3:bumps<=2?2:1;stars[lv]=Math.max(stars[lv],s);
+ const st='★'.repeat(s)+'☆'.repeat(3-s);
+ if(lv<LV.length-1){show(`<h2>Parked! ${st}</h2><p>${t.toFixed(1)}s with ${bumps} bump${bumps==1?'':'s'}. Par is ${l.par}s. Three stars needs no bumps and a time at or under par.</p><button id="nx">Next level</button> <button id="rt">Retry</button>`);
+  $('nx').onclick=()=>intro(lv+1)}
+ else{const tot=stars.reduce((a,b)=>a+b,0);show(`<h2>Lot cleared! ${st}</h2><p>You finished all ${LV.length} levels with ${tot} of ${LV.length*3} stars.</p><button id="nx">Play again</button> <button id="rt">Retry level</button>`);
+  $('nx').onclick=()=>intro(0)}
+ $('rt').onclick=()=>load(lv)}
+function body(x,y,a,w,h,col,player){g.save();g.translate(x,y);g.rotate(a);
+ g.fillStyle='rgba(0,0,0,.35)';g.fillRect(-w/2+3,-h/2+3,w,h);
+ g.fillStyle=col;g.beginPath();g.roundRect(-w/2,-h/2,w,h,5);g.fill();
+ g.fillStyle='rgba(15,20,30,.75)';g.fillRect(w*.08,-h/2+3,w*.22,h-6);g.fillRect(-w*.34,-h/2+3,w*.12,h-6);
+ if(player){g.fillStyle='#fff6c8';g.fillRect(w/2-3,-h/2+2,3,4);g.fillRect(w/2-3,h/2-6,3,4);g.fillStyle='#ff4d4d';g.fillRect(-w/2,-h/2+2,2,4);g.fillRect(-w/2,h/2-6,2,4)}
+ g.restore()}
+function draw(){
+ const l=LV[lv];g.fillStyle='#1f2433';g.fillRect(0,0,W,H);
+ g.strokeStyle='rgba(255,255,255,.05)';g.lineWidth=1;for(let i=0;i<W;i+=40){g.beginPath();g.moveTo(i,0);g.lineTo(i,H);g.stroke()}
+ const[bx,by,bw,bh]=l.b,ok=inBay();
+ g.fillStyle=ok?`rgba(61,220,151,${.18+.3*hold/.8})`:'rgba(242,194,48,.10)';g.fillRect(bx-bw/2,by-bh/2,bw,bh);
+ g.setLineDash([8,6]);g.lineWidth=3;g.strokeStyle=ok?'#3ddc97':'#f2c230';g.strokeRect(bx-bw/2,by-bh/2,bw,bh);g.setLineDash([]);
+ l.o.forEach((o,i)=>{const[ox,oy,w,h]=obs(o);
+  if(o[0]==='car'){body(ox,oy,w>h?0:PI/2,Math.max(w,h),Math.min(w,h),CARC[i%5])}
+  else if(o[0]==='wall'){g.fillStyle='#39405a';g.fillRect(ox-w/2,oy-h/2,w,h)}
+  else if(o[0]==='plant'){g.fillStyle='#2f5d4a';g.beginPath();g.roundRect(ox-w/2,oy-h/2,w,h,14);g.fill();g.fillStyle='#3f7a60';for(let k=0;k<6;k++){g.beginPath();g.arc(ox-w/2+14+((k*47)%(w-28)),oy-h/2+14+((k*29)%(h-28)),10,0,7);g.fill()}}
+  else{g.fillStyle='#ff7a1a';g.beginPath();g.arc(ox,oy,7,0,7);g.fill();g.strokeStyle='#fff';g.lineWidth=2;g.beginPath();g.arc(ox,oy,3.5,0,7);g.stroke()}});
+ if(state!=='intro'||car)body(car.x,car.y,car.a,44,22,flash>0?'#ff5a5a':'#38a8f0',1);
+ if(hold>0){g.fillStyle='rgba(0,0,0,.5)';g.fillRect(bx-30,by-bh/2-14,60,6);g.fillStyle='#3ddc97';g.fillRect(bx-30,by-bh/2-14,60*Math.min(1,hold/.8),6)}
+ $('lv').textContent='Level '+(lv+1)+' of '+LV.length;$('tm').textContent=t.toFixed(1)+'s';$('bp').textContent='Bumps '+bumps}
+let last=performance.now();
+function loop(n){const dt=Math.min(.033,(n-last)/1000);last=n;if(state==='play')update(dt);draw();requestAnimationFrame(loop)}
+t=0;bumps=0;hold=0;flash=0;car={x:LV[0].s[0],y:LV[0].s[1],a:0,v:0};
+intro(0);requestAnimationFrame(loop);
+</script>
+</body>
+</html>
